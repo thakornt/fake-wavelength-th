@@ -5,7 +5,6 @@ import Modal, { ModalOptions } from "@/component/Modal";
 import React, { useState, useEffect, useRef } from "react";
 import { Socket } from "socket.io-client";
 import { socket } from '@/lib/socket'
-import { v4 as uuidv4 } from 'uuid'
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useUserProfile } from "@/hooks/useUserProfile";
 import { useSocketConnected } from "@/hooks/useSocketConnected";
@@ -23,8 +22,8 @@ const SERVER_WAKE_UP_TIMEOUT_MS = 90_000
 const ROOM_CODE_PATTERN = /^[a-zA-Z0-9]{4}$/
 const PLAYER_NAME_MAX_LENGTH = 20
 
-type CreateRoomResponse = { success: boolean; roomId?: string; message?: string }
-type JoinRoomResponse = { success: boolean; message?: string }
+type CreateRoomResponse = { success: boolean; roomId?: string; userId?: string; message?: string }
+type JoinRoomResponse = { success: boolean; userId?: string; message?: string }
 
 export default function Lobby() {
 	const socketRef = useRef<Socket | null>(null)
@@ -63,18 +62,12 @@ export default function Lobby() {
 	}, [socketCurrent]);
 
 	useEffect(() => {
-		if (!profile.userId) {
-			updateProfile({ ...profile, userId: uuidv4() })
-		}
-
 		socketCurrent.emit("getAvailableRooms", (rooms: RoomSummary[]) => {
 			setAvailableRooms(rooms);
 		});
 		// กลับมาหน้า lobby = ออกจากห้องเดิม (ถ้ามี)
 		socketCurrent.emit("leaveRoom", {
 			roomId: profile.roomId,
-			userId: profile.userId,
-			name: profile.userName
 		});
 
 		//eslint-disable-next-line react-hooks/exhaustive-deps
@@ -162,13 +155,13 @@ export default function Lobby() {
 
 		setIsLoading(true)
 		// ไม่ต้องส่งชื่อห้อง: server สุ่มรหัสห้องที่ไม่ซ้ำให้
-		socketRef.current.timeout(SOCKET_RESPONSE_TIMEOUT_MS).emit("createRoom", { name: profile.userName, userId: profile.userId }, (timeoutError: Error | null, response: CreateRoomResponse) => {
+		socketRef.current.timeout(SOCKET_RESPONSE_TIMEOUT_MS).emit("createRoom", { name: profile.userName, playerSecret: profile.playerSecret }, (timeoutError: Error | null, response: CreateRoomResponse) => {
 			if (timeoutError) {
 				showServerTimeoutError()
 				return
 			}
 			if (response.success && response.roomId) {
-				updateProfile({ roomId: response.roomId })
+				updateProfile({ roomId: response.roomId, userId: response.userId })
 				router.push(`/main?room=${response.roomId}`);
 			} else {
 				// ต้องปิด loading ก่อน ไม่งั้นจอจะค้างที่ FullScreenLoading
@@ -200,12 +193,13 @@ export default function Lobby() {
 		setIsLoading(true)
 		updateProfile({ roomId })
 
-		socketRef.current.timeout(SOCKET_RESPONSE_TIMEOUT_MS).emit("joinRoom", { roomId, name: profile.userName, userId: profile.userId }, (timeoutError: Error | null, response: JoinRoomResponse) => {
+		socketRef.current.timeout(SOCKET_RESPONSE_TIMEOUT_MS).emit("joinRoom", { roomId, name: profile.userName, playerSecret: profile.playerSecret }, (timeoutError: Error | null, response: JoinRoomResponse) => {
 			if (timeoutError) {
 				showServerTimeoutError()
 				return
 			}
 			if (response.success) {
+				updateProfile({ userId: response.userId })
 				router.push(`/main?room=${roomId}`);
 			} else {
 				setIsLoading(false)

@@ -61,8 +61,6 @@ export default function MainScreen() {
   const handleLeaveRoomToLobby = () => {
     socket.emit("leaveRoom", {
       roomId: profile.roomId,
-      userId: profile.userId,
-      name: profile.userName,
     });
     router.push("/lobby");
   };
@@ -89,7 +87,14 @@ export default function MainScreen() {
       return;
     }
 
-    if (!profileReady || !profile?.userId) return;
+    if (!profileReady) return;
+
+    // ยังไม่มี secret (ผู้ใช้เก่า/ล้างข้อมูล): ให้ lobby สร้างให้ก่อน แล้วเข้าห้องจากรายการห้องหรือลิงก์เดิม
+    if (!profile.playerSecret) {
+      const roomQuery = roomId ? `?room=${encodeURIComponent(roomId)}` : "";
+      router.replace(`/lobby${roomQuery}`);
+      return;
+    }
 
     // ให้ห้องใน URL เป็นหลัก (เช่นเปิดจากลิงก์ที่เพื่อนแชร์) แล้วอัปเดต profile ให้ตรงกัน
     // component อื่นใช้ profile.roomId อยู่ พอ profile เปลี่ยน effect นี้จะทำงานใหม่แล้วค่อย join
@@ -103,11 +108,16 @@ export default function MainScreen() {
         "joinRoom",
         {
           roomId: profile.roomId,
-          userId: profile.userId,
+          playerSecret: profile.playerSecret,
           name: profile.userName,
         },
-        (response: { success: boolean; currentHostId?: string }) => {
+        (response: { success: boolean; currentHostId?: string; userId?: string }) => {
           if (response.success) {
+            // id ที่ server คำนวณให้เป็นตัวจริง: ถ้าไม่ตรงกับที่เก็บไว้ ให้อัปเดต (effect นี้จะ join ใหม่อีกรอบด้วย id ที่ถูก)
+            if (response.userId && response.userId !== profile.userId) {
+              updateProfile({ userId: response.userId });
+              return;
+            }
             setIsHost(response.currentHostId === profile.userId);
             // เข้าห้องเสร็จแล้ว: ส่งคำสั่งที่กดค้างไว้ระหว่างเชื่อมต่อใหม่ (ดู lib/roomActions)
             setRoomJoined(true);
@@ -135,8 +145,6 @@ export default function MainScreen() {
     const leaveRoomOnUnload = () => {
       socket.emit("leaveRoom", {
         roomId: profile.roomId,
-        userId: profile.userId,
-        name: profile.userName,
       });
     };
 

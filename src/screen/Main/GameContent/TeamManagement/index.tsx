@@ -31,7 +31,6 @@ const TeamManagement = ({ gameState, isHost, isStartTurnHighlighted }: TeamManag
   const handleSelectTeam = (team: TeamKey) => {
     emitRoomAction('userUpdateThierTeam', {
       roomId: gameState.roomId,
-      userId: profile.userId,
       team,
     })
   }
