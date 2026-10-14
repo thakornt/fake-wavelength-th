@@ -95,7 +95,6 @@ const PlayersPanel = ({
     if (action === "assignHost") {
       emitRoomAction("assignHost", {
         roomId: profile.roomId,
-        userId: player.userId,
         targetToHostId: player.userId,
       });
     }

@@ -6,6 +6,7 @@ import { pairWords as fullPairWords, PairWord } from './constant/pairWords';
 import { calculateRoundResult, getOpposingTeam, LeftRightGuess, RoundResult } from './game/scoring';
 import { generateUniqueRoomCode, RoomSummary } from './game/roomCode';
 import { pickFairRandomClueGiver } from './game/clueGiver';
+import { derivePlayerId, isValidPlayerSecret } from './game/playerIdentity';
 import {
   appendChatMessage,
   ChatMessage,
@@ -393,7 +394,15 @@ io.on("connection", (socket) => {
     callback(getRoomSummaries());
   });
 
-  socket.on("createRoom", ({ name, userId }, callback) => {
+  socket.on("createRoom", (payload, callback) => {
+    const { name, playerSecret } = payload ?? {};
+    if (!isValidPlayerSecret(playerSecret)) {
+      if (typeof callback === 'function') callback({ success: false, message: "ข้อมูลผู้เล่นไม่ถูกต้อง กรุณารีเฟรชหน้าแล้วลองใหม่" });
+      return;
+    }
+    // userId มาจาก secret ที่ server เท่านั้น ไม่เชื่อ id ที่ client ส่งมาเอง
+    const userId = derivePlayerId(playerSecret);
+
     // server เป็นคนสุ่มรหัสห้อง จะได้รับประกันว่าไม่ซ้ำกับห้องที่มีอยู่
     const room = generateUniqueRoomCode((code) => !!rooms[code]);
     if (!room) {
@@ -446,14 +455,22 @@ io.on("connection", (socket) => {
       console.log(`Room ${room} created by ${name} (${userId})`);
 
       broadcastRoomList();
-      if (callback) callback({ success: true, roomId: room });
+      if (callback) callback({ success: true, roomId: room, userId });
       postSystemChatMessage(room, rooms[room], `${name} สร้างห้อง`);
 
       updateRoomState(room, rooms[room]);
     }
   });
 
-  socket.on("joinRoom", ({ roomId, userId, name }, callback) => {
+  socket.on("joinRoom", (payload, callback) => {
+    const { roomId, name, playerSecret } = payload ?? {};
+    if (!isValidPlayerSecret(playerSecret)) {
+      if (typeof callback === 'function') callback({ success: false, message: "ข้อมูลผู้เล่นไม่ถูกต้อง กรุณารีเฟรชหน้าแล้วลองใหม่" });
+      return;
+    }
+    // userId มาจาก secret ที่ server เท่านั้น ไม่เชื่อ id ที่ client ส่งมาเอง
+    const userId = derivePlayerId(playerSecret);
+
     console.log('joining', roomId)
     cancelRoomDeletion(roomId)
 
@@ -478,7 +495,8 @@ io.on("connection", (socket) => {
 
     if (callback) callback({
       success: true,
-      currentHostId: existingRoom.hostId
+      currentHostId: existingRoom.hostId,
+      userId
     });
 
     updateRoomState(roomId, existingRoom)
@@ -487,7 +505,7 @@ io.on("connection", (socket) => {
     console.log(`${name} (${userId}) "JOINED" room ${roomId}`);
   });
 
-  socket.on('assignHost', ({ roomId, userId, targetToHostId }) => {
+  socket.on('assignHost', ({ roomId, targetToHostId }) => {
     const room = rooms[roomId];
     if (!room) return;
     if (!canControlRoom(socket, room, ['host'])) return rejectUnauthorized(socket, 'assignHost');
@@ -496,20 +514,22 @@ io.on("connection", (socket) => {
     if (!targetToHost) return;
     setNewHost(roomId, targetToHostId)
     updateRoomState(roomId, room)
-    console.log(`${userId} has set ${targetToHost.name} to HOST `)
+    console.log(`${socket.userId} has set ${targetToHost.name} to HOST `)
   })
 
-  socket.on("leaveRoom", ({ roomId, userId, name }) => {
+  socket.on("leaveRoom", ({ roomId }) => {
     const room = rooms[roomId];
     if (!room) return;
-    if (userId !== socket.userId) return rejectUnauthorized(socket, 'leaveRoom');
+    // ออกได้เฉพาะตัวเอง: ใช้ตัวตนของ socket เสมอ ไม่ใช้ userId ที่ client ส่งมา
+    const userId = socket.userId;
+    if (!userId) return rejectUnauthorized(socket, 'leaveRoom');
 
     // หน้า lobby ส่ง leaveRoom ทุกครั้งที่เปิด จึงแจ้งในแชทเฉพาะเมื่ออยู่ในห้องจริง
     const leavingUserName = room.users.get(userId)?.name;
     room.users.delete(userId);
     socket.leave(roomId);
     if (leavingUserName) postSystemChatMessage(roomId, room, `${leavingUserName} ออกจากห้อง`);
-    console.log(`${userId} (${name}) "LEFTED" room ${roomId}`);
+    console.log(`${userId} (${leavingUserName}) "LEFTED" room ${roomId}`);
 
     // socket.emit('forceLeftRoom')
 
@@ -731,12 +751,13 @@ io.on("connection", (socket) => {
     console.log(`✋ ${socket.userId} ${requested ? 'asks to skip' : 'cancels skip request'} as clue giver`)
   })
 
-  socket.on('userUpdateThierTeam', ({ roomId, userId, team }) => {
+  socket.on('userUpdateThierTeam', ({ roomId, team }) => {
     const room = rooms[roomId]
     if (!room) return
-    if (!isRoomMember(socket, room) || userId !== socket.userId) return rejectUnauthorized(socket, 'userUpdateThierTeam');
+    if (!isRoomMember(socket, room)) return rejectUnauthorized(socket, 'userUpdateThierTeam');
 
-    const user = room.users.get(userId)
+    // เปลี่ยนทีมได้เฉพาะของตัวเอง
+    const user = room.users.get(socket.userId!)
     if (!user) {
       console.log('Cannot update team. Not found user')
       return
